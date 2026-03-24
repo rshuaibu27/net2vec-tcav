@@ -1,4 +1,5 @@
 import os
+import pickle
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -14,8 +15,10 @@ IMAGENET_TRANSFORM = transforms.Compose([
     ),
 ])
 
+
 class BrodenConceptDataset(Dataset):
-    def __init__(self, broden_root, concept_name, split='train', transform=None):
+    def __init__(self, broden_root, concept_name, split='train',
+                 index_path='concept_index.pkl', transform=None):
         self.broden_root = broden_root
         self.concept_name = concept_name
         self.transform = transform or IMAGENET_TRANSFORM
@@ -24,43 +27,45 @@ class BrodenConceptDataset(Dataset):
         match = labels[labels['name'] == concept_name]
         if len(match) == 0:
             raise ValueError(
-                f"Concept '{concept_name}' not found in label.csv. "
-                f"Check spelling — use label.csv to find the exact name."
+                f"Concept '{concept_name}' not found in label.csv."
             )
+
         self.label_number = int(match.iloc[0]['number'])
+        self.mask_code = self._find_mask_code(broden_root, concept_name)
 
-        index = pd.read_csv(os.path.join(broden_root, 'index.csv'))
-        index = index[index['split'] == split].reset_index(drop=True)
+        # Load pre-built index
+        if not os.path.exists(index_path):
+            raise FileNotFoundError(
+                f"concept_index.pkl not found at {index_path}. "
+                f"Run build_concept_index() first."
+            )
+        with open(index_path, 'rb') as f:
+            concept_index = pickle.load(f)
 
-        mask_columns = ['color', 'object', 'part', 'material']
-        self.entries = []
+        if self.mask_code not in concept_index:
+            raise ValueError(
+                f"Concept '{concept_name}' (code {self.mask_code}) "
+                f"not found in index."
+            )
 
-        for _, row in index.iterrows():
-            for col in mask_columns:
-                if pd.isna(row[col]):
-                    continue
+        self.entries = concept_index[self.mask_code][split]
+        print(f"  '{concept_name}' ({split}): {len(self.entries)} images")
 
-                mask_path = os.path.join(broden_root, 'images', row[col])
-                if not os.path.exists(mask_path):
-                    continue
-
-                mask_arr = np.array(Image.open(mask_path))
-                if mask_arr.ndim == 3:
-                    mask_channel = mask_arr[:, :, 0]
-                else:
-                    mask_channel = mask_arr
-
-                if self.label_number in np.unique(mask_channel):
-                    self.entries.append({
-                        'image_path': os.path.join(
-                            broden_root, 'images', row['image']
-                        ),
-                        'mask_path':  mask_path,
-                        'mask_col':   col,
-                    })
-                    break
-
-        print(f"  '{concept_name}' ({split}): {len(self.entries)} images found")
+    def _find_mask_code(self, broden_root, concept_name):
+        """Find the pixel code used in mask files for this concept."""
+        for csv_name in ['c_object.csv', 'c_part.csv',
+                         'c_material.csv', 'c_color.csv']:
+            path = os.path.join(broden_root, csv_name)
+            if not os.path.exists(path):
+                continue
+            df = pd.read_csv(path)
+            match = df[df['name'] == concept_name]
+            if len(match) > 0:
+                return int(match.iloc[0]['code'])
+        raise ValueError(
+            f"Could not find mask code for '{concept_name}' "
+            f"in any c_*.csv file."
+        )
 
     def __len__(self):
         return len(self.entries)
@@ -68,15 +73,17 @@ class BrodenConceptDataset(Dataset):
     def __getitem__(self, idx):
         entry = self.entries[idx]
 
+        # Load and transform image
         img = Image.open(entry['image_path']).convert('RGB')
         img_tensor = self.transform(img)
 
+        # Load mask and extract binary mask for this concept
         mask_arr = np.array(Image.open(entry['mask_path']))
         if mask_arr.ndim == 3:
             mask_channel = mask_arr[:, :, 0]
         else:
             mask_channel = mask_arr
 
-        binary_mask = (mask_channel == self.label_number).astype(np.float32)
+        binary_mask = (mask_channel == self.mask_code).astype(np.float32)
 
         return img_tensor, binary_mask
