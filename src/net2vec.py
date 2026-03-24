@@ -65,3 +65,57 @@ def compute_thresholds(model, broden_root, layer_name,
     print(f"  Threshold range: [{thresholds.min():.4f}, {thresholds.max():.4f}]")
 
     return thresholds
+
+def compute_single_filter_iou(model, dataset, thresholds,
+                               layer_name, batch_size=32):
+    
+    loader = DataLoader(dataset, batch_size=batch_size,
+                        shuffle=False, num_workers=2)
+
+    thresholds_t = torch.tensor(thresholds, dtype=torch.float32)
+
+    total_intersection = None
+    total_union        = None
+
+    model.eval()
+    for img_batch, mask_batch in tqdm(loader, desc=f"IoU {layer_name}"):
+        img_batch = img_batch.to(model.device)
+        mask_batch = mask_batch.to(model.device) 
+
+        with torch.no_grad():
+            _ = model(img_batch)
+
+        acts = model.get_activations()[layer_name]
+        B, K, H, W = acts.shape
+
+        thresh = thresholds_t.to(model.device)
+        binary_acts = (acts > thresh[None, :, None, None]).float()
+
+        target_h, target_w = mask_batch.shape[1], mask_batch.shape[2]
+
+        flat = binary_acts.view(B * K, 1, H, W)
+        upsampled = F.interpolate(flat, size=(target_h, target_w),
+                                  mode='bilinear', align_corners=False)
+        upsampled = (upsampled > 0.5).float()       # re-binarise
+        upsampled = upsampled.view(B, K, target_h, target_w)
+
+        gt = mask_batch.unsqueeze(1).expand(-1, K, -1, -1) 
+
+        intersection = (upsampled * gt).sum(dim=(0, 2, 3)) 
+        union = ((upsampled + gt) > 0.5).float().sum(dim=(0, 2, 3)) 
+
+        if total_intersection is None:
+            total_intersection = intersection
+            total_union        = union
+        else:
+            total_intersection += intersection
+            total_union        += union
+
+    # Set IoU: divide once after summing across all images
+    iou = torch.where(
+        total_union > 0,
+        total_intersection / total_union,
+        torch.zeros_like(total_intersection)
+    )
+
+    return iou.cpu().numpy()
