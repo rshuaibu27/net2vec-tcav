@@ -119,3 +119,173 @@ def compute_single_filter_iou(model, dataset, thresholds,
     )
 
     return iou.cpu().numpy()
+
+def train_multi_filter_probe(model, dataset, thresholds,
+                              layer_name, n_epochs=30,
+                              lr=1e-4, momentum=0.9, batch_size=64):
+    """
+    Learn a weight vector w ∈ R^K to combine thresholded filter
+    activations for concept segmentation.
+
+    From the paper eq. 2:
+        M(x; w) = sigmoid(sum_k wk * I(Ak(x) > Tk))
+
+    Trained with size-weighted binary cross-entropy (eq. 4):
+        L = -[α * M * Lc + (1-α) * (1-M) * (1-Lc)]
+    where α = 1 - mean_foreground_fraction
+
+    Args:
+        model:      AlexNetProbe instance
+        dataset:    BrodenConceptDataset for this concept (train split)
+        thresholds: numpy array of shape (K,)
+        layer_name: e.g. 'conv5'
+        n_epochs:   training epochs (paper uses 30)
+        lr:         learning rate (paper uses 1e-4)
+        momentum:   SGD momentum (paper uses 0.9)
+        batch_size: images per batch (paper uses 64)
+
+    Returns:
+        weights: numpy array of shape (K,) — the concept embedding
+        losses:  list of per-epoch losses (for debugging)
+    """
+    import torch.nn as nn
+
+    loader = DataLoader(dataset, batch_size=batch_size,
+                        shuffle=True, num_workers=2)
+
+    thresholds_t = torch.tensor(thresholds, dtype=torch.float32)
+
+    # Get number of filters K from the thresholds
+    K = len(thresholds)
+
+    # Learnable weights — one per filter
+    weights = torch.zeros(K, requires_grad=True,
+                          device=model.device)
+    nn.init.normal_(weights, mean=0.0, std=0.01)
+    weights = weights.clone().detach().requires_grad_(True)
+
+    optimizer = torch.optim.SGD([weights], lr=lr, momentum=momentum)
+
+    # Compute α from the dataset's foreground fraction
+    # α = 1 - mean fraction of foreground pixels
+    # We estimate this from the first few batches
+    foreground_fractions = []
+    for imgs, masks in loader:
+        foreground_fractions.append(masks.mean().item())
+        if len(foreground_fractions) >= 5:
+            break
+    alpha = 1.0 - np.mean(foreground_fractions)
+    alpha = float(np.clip(alpha, 0.01, 0.99))
+    print(f"  Alpha (class balance): {alpha:.4f}")
+
+    losses = []
+    model.eval()
+
+    for epoch in range(n_epochs):
+        epoch_loss = 0.0
+        n_batches = 0
+
+        for img_batch, mask_batch in loader:
+            img_batch  = img_batch.to(model.device)   # (B, 3, 227, 227)
+            mask_batch = mask_batch.to(model.device)  # (B, 113, 113)
+
+            with torch.no_grad():
+                _ = model(img_batch)
+
+            acts = model.get_activations()[layer_name]  # (B, K, H, W)
+            B, K_acts, H, W = acts.shape
+
+            # Threshold activations: I(Ak(x) > Tk)
+            thresh = thresholds_t.to(model.device)
+            binary_acts = (acts > thresh[None, :, None, None]).float()
+            # binary_acts: (B, K, H, W)
+
+            # Upsample to mask resolution
+            target_h, target_w = mask_batch.shape[1], mask_batch.shape[2]
+            flat = binary_acts.view(B * K_acts, 1, H, W)
+            upsampled = F.interpolate(flat, size=(target_h, target_w),
+                                      mode='bilinear', align_corners=False)
+            upsampled = upsampled.view(B, K_acts, target_h, target_w)
+            # upsampled: (B, K, 113, 113)
+
+            # Weighted combination: sum_k wk * upsampled_k
+            # weights: (K,) → broadcast to (B, K, H, W)
+            weighted = (upsampled * weights[None, :, None, None]).sum(dim=1)
+            # weighted: (B, 113, 113)
+
+            # Sigmoid to get probability mask
+            pred = torch.sigmoid(weighted)  # (B, 113, 113)
+
+            # Size-weighted binary cross-entropy (eq. 4)
+            loss = -(
+                alpha * mask_batch * torch.log(pred + 1e-8)
+                + (1 - alpha) * (1 - mask_batch) * torch.log(1 - pred + 1e-8)
+            ).mean()
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item()
+            n_batches += 1
+
+        avg_loss = epoch_loss / max(n_batches, 1)
+        losses.append(avg_loss)
+
+        if (epoch + 1) % 10 == 0:
+            print(f"  Epoch {epoch+1}/{n_epochs}  loss: {avg_loss:.4f}")
+
+    return weights.detach().cpu().numpy(), losses
+
+
+def evaluate_multi_filter_iou(model, dataset, thresholds,
+                               weights, layer_name, batch_size=32):
+    """
+    Evaluate the multi-filter probe's set IoU on a dataset split.
+
+    Args:
+        weights: numpy array of shape (K,) from train_multi_filter_probe()
+
+    Returns:
+        iou: float — set IoU on this split
+    """
+    loader = DataLoader(dataset, batch_size=batch_size,
+                        shuffle=False, num_workers=2)
+
+    thresholds_t = torch.tensor(thresholds, dtype=torch.float32)
+    weights_t    = torch.tensor(weights,    dtype=torch.float32)
+
+    total_intersection = 0.0
+    total_union        = 0.0
+
+    model.eval()
+    with torch.no_grad():
+        for img_batch, mask_batch in loader:
+            img_batch  = img_batch.to(model.device)
+            mask_batch = mask_batch.to(model.device)
+
+            _ = model(img_batch)
+            acts = model.get_activations()[layer_name]
+            B, K, H, W = acts.shape
+
+            thresh  = thresholds_t.to(model.device)
+            weights_d = weights_t.to(model.device)
+
+            binary_acts = (acts > thresh[None, :, None, None]).float()
+
+            target_h, target_w = mask_batch.shape[1], mask_batch.shape[2]
+            flat = binary_acts.view(B * K, 1, H, W)
+            upsampled = F.interpolate(flat, size=(target_h, target_w),
+                                      mode='bilinear', align_corners=False)
+            upsampled = upsampled.view(B, K, target_h, target_w)
+
+            weighted = (upsampled * weights_d[None, :, None, None]).sum(dim=1)
+            pred = torch.sigmoid(weighted)
+            pred_binary = (pred > 0.5).float()
+
+            total_intersection += (pred_binary * mask_batch).sum().item()
+            total_union += ((pred_binary + mask_batch) > 0.5).float().sum().item()
+
+    if total_union == 0:
+        return 0.0
+    return total_intersection / total_union
