@@ -240,15 +240,7 @@ def train_multi_filter_probe(model, dataset, thresholds,
 
 def evaluate_multi_filter_iou(model, dataset, thresholds,
                                weights, layer_name, batch_size=32):
-    """
-    Evaluate the multi-filter probe's set IoU on a dataset split.
 
-    Args:
-        weights: numpy array of shape (K,) from train_multi_filter_probe()
-
-    Returns:
-        iou: float — set IoU on this split
-    """
     loader = DataLoader(dataset, batch_size=batch_size,
                         shuffle=False, num_workers=2)
 
