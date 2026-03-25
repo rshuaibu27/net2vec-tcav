@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+broden1_227/
+*.zip
+.DS_Store

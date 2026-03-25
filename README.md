@@ -17,7 +17,7 @@ of concept representation.
 
 Open a new Colab notebook and run:
 ```python
-!git clone https://github.com/YOUR_USERNAME/net2vec-tcav.git
+!git clone https://github.com/rshuaibu27/net2vec-tcav.git
 !bash run_colab.sh
 ```
 
@@ -27,7 +27,7 @@ T4 GPU.
 
 ### Locally
 ```bash
-git clone https://github.com/YOUR_USERNAME/net2vec-tcav.git
+git clone https://github.com/rshuaibu27/net2vec-tcav.git
 cd net2vec-tcav
 pip install -r requirements.txt
 # Download Broden manually to ../broden1_227
