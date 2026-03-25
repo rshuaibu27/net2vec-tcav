@@ -62,6 +62,7 @@ class BrodenConceptDataset(Dataset):
     def _find_mask_code(self, broden_root, concept_name):
         """Find pixel code and mask column for this concept."""
         col_map = {
+            'part':     'c_part.csv',
             'color':    'c_color.csv',
             'object':   'c_object.csv',
             'part':     'c_part.csv',
