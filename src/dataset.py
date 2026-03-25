@@ -32,7 +32,26 @@ class BrodenConceptDataset(Dataset):
             )
 
         self.label_number = int(match.iloc[0]['number'])
-        self.mask_code = self._find_mask_code(broden_root, concept_name)
+        #self.mask_code = self._find_mask_code(broden_root, concept_name)
+
+        self.mask_code, self.mask_col = self._find_mask_code(
+            broden_root, concept_name
+        )
+
+        with open(index_path, 'rb') as f:
+            concept_index = pickle.load(f)
+
+        # Try tuple key first (v2 index), fall back to code only (v1)
+        key = (self.mask_code, self.mask_col)
+        if key in concept_index:
+            self.entries = concept_index[key][split]
+        elif self.mask_code in concept_index:
+            self.entries = concept_index[self.mask_code][split]
+        else:
+            raise ValueError(
+                f"Concept '{concept_name}' (code {self.mask_code}, "
+                f"col {self.mask_col}) not found in index."
+        )
 
         # Load pre-built index
         if not os.path.exists(index_path):
@@ -59,19 +78,22 @@ class BrodenConceptDataset(Dataset):
         print(f"  '{concept_name}' ({split}): {len(self.entries)} images")
 
     def _find_mask_code(self, broden_root, concept_name):
-        """Find the pixel code used in mask files for this concept."""
-        for csv_name in ['c_object.csv', 'c_part.csv',
-                         'c_material.csv', 'c_color.csv']:
+        col_map = {
+            'color':    'c_color.csv',
+            'object':   'c_object.csv',
+            'part':     'c_part.csv',
+            'material': 'c_material.csv',
+        }
+        for col, csv_name in col_map.items():
             path = os.path.join(broden_root, csv_name)
             if not os.path.exists(path):
                 continue
             df = pd.read_csv(path)
             match = df[df['name'] == concept_name]
             if len(match) > 0:
-                return int(match.iloc[0]['code'])
+                return int(match.iloc[0]['code']), col
         raise ValueError(
-            f"Could not find mask code for '{concept_name}' "
-            f"in any c_*.csv file."
+            f"Could not find mask code for '{concept_name}'."
         )
 
     def __len__(self):
