@@ -29,6 +29,7 @@ def parse_args():
     p.add_argument('--n_epochs',     type=int, default=20)
     p.add_argument('--max_images',   type=int, default=5000)
     p.add_argument('--batch_size',   type=int, default=64)
+    p.add_argument('--max_samples', type=int, default=3000, help='Max images per concept per split')
     return p.parse_args()
 
 
@@ -100,13 +101,15 @@ def main():
         # Load datasets once per concept
         try:
             train_set = BrodenConceptDataset(
-                args.broden_root, concept,
-                split='train', index_path=args.index_path
+            args.broden_root, concept,
+            split='train', index_path=args.index_path,
+            max_samples=args.max_samples
             )
             val_set = BrodenConceptDataset(
-                args.broden_root, concept,
-                split='val', index_path=args.index_path
-            )
+            args.broden_root, concept,
+            split='val', index_path=args.index_path,
+            max_samples=args.max_samples // 3
+)
         except ValueError as e:
             print(f"  Skipping — {e}")
             continue

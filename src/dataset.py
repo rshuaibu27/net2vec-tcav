@@ -18,10 +18,11 @@ IMAGENET_TRANSFORM = transforms.Compose([
 
 class BrodenConceptDataset(Dataset):
     def __init__(self, broden_root, concept_name, split='train',
-                 index_path='concept_index.pkl', transform=None):
+                 index_path='concept_index.pkl', transform=None, max_samples=None):
         self.broden_root = broden_root
         self.concept_name = concept_name
         self.transform = transform or IMAGENET_TRANSFORM
+        #self.max_samples = max_samples
 
         labels = pd.read_csv(os.path.join(broden_root, 'label.csv'))
         match = labels[labels['name'] == concept_name]
@@ -49,6 +50,12 @@ class BrodenConceptDataset(Dataset):
             )
 
         self.entries = concept_index[self.mask_code][split]
+        print(f"  '{concept_name}' ({split}): {len(self.entries)} images")
+
+        if max_samples is not None and len(self.entries) > max_samples:
+            import random
+            random.seed(42)
+            self.entries = random.sample(self.entries, max_samples)
         print(f"  '{concept_name}' ({split}): {len(self.entries)} images")
 
     def _find_mask_code(self, broden_root, concept_name):
