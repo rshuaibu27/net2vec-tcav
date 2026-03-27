@@ -1,18 +1,3 @@
-"""
-experiments/plot_results.py
-
-Generates all figures for the report:
-    fig1_net2vec_by_layer.pdf     - Single vs multi-filter IoU across layers
-    fig2_net2vec_per_concept.pdf  - Per-concept IoU at conv5
-    fig3_tcav_heatmap.pdf         - TCAV scores across concepts x layers
-    fig4_comparison_scatter.pdf   - Net2Vec IoU vs TCAV score (key figure)
-
-Usage (in Colab):
-    !python net2vec-tcav/experiments/plot_results.py \
-        --results_dir net2vec-tcav/results \
-        --output_dir net2vec-tcav/figures
-"""
-
 import os
 import sys
 import pickle
@@ -258,7 +243,7 @@ def plot_comparison_scatter(n2v, tcav, output_dir):
                  'Net2Vec IoU vs TCAV score per concept',
                  fontsize=12)
     ax.set_ylim(-0.05, 1.1)
-    ax.legend(fontsize=8, framealpha=0.7, loc='upper left')
+    ax.legend(fontsize=8, framealpha=0.7, bbox_to_anchor=(1.01, 1), loc='upper left', borderaxespad=0)
 
     plt.tight_layout()
     path = os.path.join(output_dir, 'fig4_comparison_scatter.pdf')
